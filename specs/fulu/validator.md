@@ -81,6 +81,7 @@ class GetPayloadResponse(object):
     execution_payload: ExecutionPayload
     block_value: uint256
     blobs_bundle: BlobsBundle  # [Modified in Fulu:EIP7594]
+    execution_requests: Sequence[bytes]
 ```
 
 ## Protocol
@@ -140,14 +141,9 @@ A node SHOULD dynamically adjust its custody groups (without any input from the
 user) following any changes to the total effective balances of attached
 validators.
 
-If the node's custody requirements are increased, it MAY backfill custody groups
-as a result of this change. In such cases, it SHOULD delay advertising the
-updated `custody_group_count` until the backfill is complete. If the node opts
-not to perform a backfill, it SHOULD only advertise the updated
-`custody_group_count` after `MIN_EPOCHS_FOR_BLOB_SIDECARS_REQUESTS` epochs;
-after `MIN_EPOCHS_FOR_BLOB_SIDECARS_REQUESTS` epochs, the node will be able to
-respond to any `DataColumnSidecar` request within the retention period. The
-updated `custody_group_count` SHOULD persist across node restarts.
+If the node's custody requirements are increased, it SHOULD immediately
+advertise the updated `custody_group_count`. It MAY backfill custody groups as a
+result of this change.
 
 If a node's custody requirements decrease, it SHOULD NOT update the
 `custody_group_count` to reflect this reduction. The node SHOULD continue to
@@ -159,6 +155,14 @@ the previous (highest) `custody_group_count`. The previous (highest)
 Nodes SHOULD be capable of handling multiple changes to custody requirements
 within the same retention period (e.g., an increase in one epoch followed by a
 decrease in the next).
+
+When a value for `custody_group_count` is set, the `earliest_available_slot`
+field in the status RPC message SHOULD reflect the slot at which the
+`custody_group_count` was updated.
+
+If the node decides to backfill due to the `custody_group_count` change, the
+`earliest_available_slot` field in the status RPC message MAY be updated with
+progressively lower values as the backfill process advances.
 
 ### Block and sidecar proposal
 
@@ -174,14 +178,25 @@ fields for the necessary context.
 
 ##### `get_data_column_sidecars`
 
-The sequence of sidecars associated with a block and can be obtained by first
-computing
-`cells_and_kzg_proofs = [compute_cells_and_kzg_proofs(blob) for blob in blobs]`
-and then calling
+The sidecars associated with a block can be created by calling
+[`engine_getPayloadV5`](https://github.com/ethereum/execution-apis/blob/main/src/engine/osaka.md#engine_getpayloadv5),
+then constructing the list of cells and proofs for each blob (as defined in the
+example below) using the blobs bundle in the response, and finally by calling
 `get_data_column_sidecars_from_block(signed_block, cells_and_kzg_proofs)`.
 
+<!-- eth2spec: skip -->
+
+```python
+cells_and_kzg_proofs = []
+for i, blob in enumerate(blobs_bundle.blobs):
+    start = i * CELLS_PER_EXT_BLOB
+    end = (i + 1) * CELLS_PER_EXT_BLOB
+    cell_proofs = zip(compute_cells(blob), blobs_bundle.proofs[start:end])
+    cells_and_kzg_proofs.extend(cell_proofs)
+```
+
 Moreover, the full sequence of sidecars can also be computed from
-`cells_and_kzg_proofs` and any single `sidecar`, by calling
+`cells_and_kzg_proofs` and any single `sidecar` by calling
 `get_data_column_sidecars_from_column_sidecar(sidecar, cells_and_kzg_proofs)`.
 This can be used in distributed blob publishing, to reconstruct all sidecars
 from any sidecar received on the wire, assuming all cells and kzg proofs could
